@@ -28,7 +28,7 @@ const DEFAULT_ICON_MAPPING: IconMapping = {
   payment: 'fa-wallet',
 };
 
-const SPREADSHEET_ID = '1Z4EboM_ZN_RwzuLceVQ7afeeVE_zmdCafl_H5T0aFr4';
+const SPREADSHEET_ID = '12L__j0lwySdW4bleW4rIbnCvRdcARxfZ94v4NElAJsI';
 
 const App: React.FC = () => {
   const [transactions, setTransactions] = useState<Transaction[]>([]);

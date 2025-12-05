@@ -44,7 +44,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   const [apiKey, setApiKey] = useState(initialApiKey || '');
   const [clientId, setClientId] = useState(initialClientId || '');
   const [webhookUrl, setWebhookUrl] = useState(initialWebhookUrl || '');
-  const SPREADSHEET_ID = '1Z4EboM_ZN_RwzuLceVQ7afeeVE_zmdCafl_H5T0aFr4';
+  const SPREADSHEET_ID = '12L__j0lwySdW4bleW4rIbnCvRdcARxfZ94v4NElAJsI';
 
   useEffect(() => {
     setApiKey(initialApiKey || '');
