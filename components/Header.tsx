@@ -8,14 +8,15 @@ interface HeaderProps {
   onSetTheme: (theme: ThemeType) => void;
   onToggleCalculator: () => void;
   onToggleSettings: () => void;
+  onLogout: () => void;
 }
 
-const Header: React.FC<HeaderProps> = ({ onToggleChart, currentTheme, onSetTheme, onToggleCalculator, onToggleSettings }) => {
+const Header: React.FC<HeaderProps> = ({ onToggleChart, currentTheme, onSetTheme, onToggleCalculator, onToggleSettings, onLogout }) => {
   return (
     <header className="pt-8 px-6 flex justify-between items-center mb-6">
       <div>
-        <p className="text-xs font-bold uppercase tracking-widest opacity-50 mb-1 text-theme-main">My Dashboard</p>
-        <h1 className="text-2xl font-bold text-theme-main">Tea Notes</h1>
+        <p className="text-xs font-bold uppercase tracking-widest opacity-50 mb-1 text-theme-main">Overview</p>
+        <h1 className="text-2xl font-bold text-theme-main">Office BU App</h1>
       </div>
       <div className="flex items-center gap-4">
         <button 
@@ -40,6 +41,13 @@ const Header: React.FC<HeaderProps> = ({ onToggleChart, currentTheme, onSetTheme
           <i className="fa-solid fa-chart-pie"></i>
         </button>
         <ThemeSelector currentTheme={currentTheme} onSetTheme={onSetTheme} />
+          <button 
+          onClick={onLogout}
+          className="w-10 h-10 rounded-full bg-theme-surface text-red-500 shadow-sm flex items-center justify-center transition-transform active:scale-95"
+          aria-label="Logout"
+        >
+          <i className="fa-solid fa-right-from-bracket"></i>
+        </button>
       </div>
     </header>
   );

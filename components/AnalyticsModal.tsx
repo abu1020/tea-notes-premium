@@ -23,6 +23,15 @@ const AnalyticsModal: React.FC<AnalyticsModalProps> = ({ isOpen, onClose, transa
     ].filter(d => d.value > 0);
   }, [transactions]);
 
+  const totalQuantity = useMemo(() => {
+    return transactions.reduce((total, t) => {
+      if (t.type !== 'payment') {
+        return total + t.quantity;
+      }
+      return total;
+    }, 0);
+  }, [transactions]);
+
   // Handle render only when needed or just use CSS transform
   // For simplicity with the Recharts responsive container size, we render but hide
   const modalClasses = `fixed inset-0 bg-theme-surface z-50 transition-transform duration-300 p-6 flex flex-col ${isOpen ? 'translate-y-0' : 'translate-y-full'}`;
@@ -41,30 +50,37 @@ const AnalyticsModal: React.FC<AnalyticsModalProps> = ({ isOpen, onClose, transa
       
       <div className="flex-1 flex flex-col items-center justify-center">
         {data.length > 0 ? (
-          <div className="w-full h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={data}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={60}
-                  outerRadius={80}
-                  paddingAngle={5}
-                  dataKey="value"
-                >
-                  {data.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} stroke="none" />
-                  ))}
-                </Pie>
-                <Tooltip 
-                  formatter={(value: number) => `₹${value.toFixed(2)}`}
-                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}
-                  itemStyle={{ fontWeight: 'bold' }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
+          <>
+            <div className="w-full h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={data}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={60}
+                    outerRadius={80}
+                    paddingAngle={5}
+                    dataKey="value"
+                  >
+                    {data.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.color} stroke="none" />
+                    ))}
+                  </Pie>
+                  <Tooltip 
+                    formatter={(value: number) => `₹${value.toFixed(2)}`}
+                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}
+                    itemStyle={{ fontWeight: 'bold' }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            
+            <div className="mt-8 text-center bg-theme-body p-4 rounded-2xl w-full max-w-xs mx-auto">
+                <p className="text-sm font-bold uppercase text-theme-muted tracking-wider">Total Items Purchased</p>
+                <p className="text-3xl font-bold text-theme-main mt-1">{totalQuantity}</p>
+            </div>
+          </>
         ) : (
           <div className="text-theme-muted flex flex-col items-center">
              <i className="fa-solid fa-chart-pie text-4xl mb-4 opacity-50"></i>

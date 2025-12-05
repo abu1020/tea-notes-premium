@@ -19,7 +19,6 @@ export interface ConfirmationModalState {
   onConfirm: () => void;
 }
 
-// FIX: Add missing IconMapping type which is used in components/SettingsModal.tsx
 export type IconMapping = {
   [key in TransactionType]: string;
 };
