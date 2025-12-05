@@ -22,3 +22,5 @@ export interface ConfirmationModalState {
 export type IconMapping = {
   [key in TransactionType]: string;
 };
+
+export type SyncStatus = 'offline' | 'connecting' | 'connected' | 'syncing' | 'error';

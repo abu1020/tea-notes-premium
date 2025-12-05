@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Transaction, ThemeType, ConfirmationModalState, IconMapping } from './types';
+import { Transaction, ThemeType, ConfirmationModalState, IconMapping, SyncStatus } from './types';
 import Header from './components/Header';
 import Dashboard from './components/Dashboard';
 import TransactionList from './components/TransactionList';
@@ -8,17 +8,10 @@ import AnalyticsModal from './components/AnalyticsModal';
 import ConfirmationModal from './components/ConfirmationModal';
 import CalculatorModal from './components/CalculatorModal';
 import SettingsModal from './components/SettingsModal';
-import LoginPage from './components/LoginPage';
-import GoogleSheetSetup from './components/GoogleSheetSetup';
-import { getTransactions, appendTransaction, deleteTransactionRow } from './utils/googleSheetsApi';
+import { getTransactions } from './utils/googleSheetsApi';
+import { syncChangeToWebhook } from './utils/webhook';
 
-// --- Google API Configuration ---
-// IMPORTANT: You must create a project in the Google Cloud Console, enable the Google Sheets API,
-// and create an OAuth 2.0 Client ID and an API Key.
-// Replace the placeholder values below with your actual credentials.
-const API_KEY = 'YOUR_GOOGLE_API_KEY'; // Replace with your API Key
-const CLIENT_ID = 'YOUR_GOOGLE_CLIENT_ID'; // Replace with your OAuth 2.0 Client ID
-const SCOPES = 'https://www.googleapis.com/auth/spreadsheets';
+const SCOPES = 'https://www.googleapis.com/auth/spreadsheets.readonly';
 
 declare global {
   interface Window {
@@ -34,6 +27,8 @@ const DEFAULT_ICON_MAPPING: IconMapping = {
   snacks: 'fa-cookie-bite',
   payment: 'fa-wallet',
 };
+
+const SPREADSHEET_ID = '1Z4EboM_ZN_RwzuLceVQ7afeeVE_zmdCafl_H5T0aFr4';
 
 const App: React.FC = () => {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -53,150 +48,229 @@ const App: React.FC = () => {
     onConfirm: () => {},
   });
 
-  // --- New state for Google Integration ---
+  // --- State for Google Integration ---
+  const [apiKey, setApiKey] = useState<string | null>(null);
+  const [clientId, setClientId] = useState<string | null>(null);
+  const [webhookUrl, setWebhookUrl] = useState<string | null>(null);
   const [gapiReady, setGapiReady] = useState(false);
   const [gisReady, setGisReady] = useState(false);
   const [isSignedIn, setIsSignedIn] = useState(false);
-  const [spreadsheetId, setSpreadsheetId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('offline');
 
-
-  // --- Initialization ---
+  // --- Initialization: Load all settings and local data ---
   useEffect(() => {
+    setIsLoading(true);
     const savedTheme = localStorage.getItem('officeBuAppTheme') as ThemeType;
     if (savedTheme) setTheme(savedTheme);
 
     const savedIcons = localStorage.getItem('officeBuAppIcons');
     if (savedIcons) setIconMapping(JSON.parse(savedIcons));
+    
+    const savedTransactions = localStorage.getItem('officeBuAppTransactions');
+    if (savedTransactions) {
+      setTransactions(JSON.parse(savedTransactions));
+    }
 
-    const savedSheetId = localStorage.getItem('officeBuAppSheetId');
-    if (savedSheetId) setSpreadsheetId(savedSheetId);
-
-    // Load Google scripts
-    const gapiScript = document.createElement('script');
-    gapiScript.src = 'https://apis.google.com/js/api.js';
-    gapiScript.onload = () => window.gapi.load('client', initializeGapiClient);
-    document.body.appendChild(gapiScript);
-
-    const gisScript = document.createElement('script');
-    gisScript.src = 'https://accounts.google.com/gsi/client';
-    gisScript.async = true;
-    gisScript.defer = true;
-    gisScript.onload = initializeGisClient;
-    document.body.appendChild(gisScript);
+    const savedApiKey = localStorage.getItem('officeBuAppApiKey');
+    const savedClientId = localStorage.getItem('officeBuAppClientId');
+    const savedWebhookUrl = localStorage.getItem('officeBuAppWebhookUrl');
+    if (savedApiKey && savedClientId) {
+      setApiKey(savedApiKey);
+      setClientId(savedClientId);
+    }
+    if (savedWebhookUrl) setWebhookUrl(savedWebhookUrl);
+    
+    setIsLoading(false);
   }, []);
 
-  const initializeGapiClient = async () => {
-    await window.gapi.client.init({
-      apiKey: API_KEY,
-      discoveryDocs: ['https://sheets.googleapis.com/$discovery/rest?version=v4'],
-    });
-    setGapiReady(true);
-  };
-
-  const initializeGisClient = () => {
-    window.tokenClient = window.google.accounts.oauth2.initTokenClient({
-      client_id: CLIENT_ID,
-      scope: SCOPES,
-      callback: (tokenResponse: any) => {
-        if (tokenResponse.error) {
-          setError(tokenResponse.error);
-          return;
-        }
-        setIsSignedIn(true);
-      },
-    });
-    setGisReady(true);
-  };
-  
-  useEffect(() => {
-    if (gapiReady && gisReady) {
-        setIsLoading(false);
+  // --- Google API Initialization (for reading data) ---
+  const initializeGapiClient = useCallback(async (key: string) => {
+    try {
+      await window.gapi.client.init({
+        apiKey: key,
+        discoveryDocs: ['https://sheets.googleapis.com/$discovery/rest?version=v4'],
+      });
+      setGapiReady(true);
+    } catch (err) {
+      setError("Invalid Google API Key. Please check it in Settings.");
+      setSyncStatus('error');
     }
-  }, [gapiReady, gisReady]);
+  }, []);
+  
+  const initializeGisClient = useCallback((id: string) => {
+    try {
+      window.tokenClient = window.google.accounts.oauth2.initTokenClient({
+        client_id: id,
+        scope: SCOPES,
+        callback: (tokenResponse: any) => {
+          if (tokenResponse.error) {
+            if (tokenResponse.error !== 'popup_closed_by_user') {
+                 setError(`Auth failed: ${tokenResponse.error}`);
+                 setSyncStatus('error');
+            }
+            return;
+          }
+          setIsSignedIn(true);
+        },
+      });
+      setGisReady(true);
+    } catch (err) {
+      setError("Invalid Google Client ID. Please check it in Settings.");
+      setSyncStatus('error');
+    }
+  }, []);
 
-  // --- Data Fetching ---
-  const loadTransactions = useCallback(async () => {
-    if (!spreadsheetId) return;
-    setIsLoading(true);
+  useEffect(() => {
+    if (apiKey && clientId && !gapiReady && !gisReady) {
+      setSyncStatus('connecting');
+      const gapiScriptId = 'gapi-script';
+      if (!document.getElementById(gapiScriptId)) {
+        const gapiScript = document.createElement('script');
+        gapiScript.id = gapiScriptId;
+        gapiScript.src = 'https://apis.google.com/js/api.js';
+        gapiScript.onload = () => window.gapi.load('client', () => initializeGapiClient(apiKey));
+        document.body.appendChild(gapiScript);
+      }
+
+      const gisScriptId = 'gis-script';
+      if (!document.getElementById(gisScriptId)) {
+        const gisScript = document.createElement('script');
+        gisScript.id = gisScriptId;
+        gisScript.src = 'https://accounts.google.com/gsi/client';
+        gisScript.async = true;
+        gisScript.defer = true;
+        gisScript.onload = () => initializeGisClient(clientId);
+        document.body.appendChild(gisScript);
+      }
+    }
+  }, [apiKey, clientId, gapiReady, gisReady, initializeGapiClient, initializeGisClient]);
+
+  // --- Data Fetching Logic (Source of Truth) ---
+  const fetchDataFromSheet = useCallback(async () => {
+    if (!isSignedIn) return;
+
+    setSyncStatus('syncing');
     setError(null);
     try {
-      const loadedTransactions = await getTransactions(spreadsheetId);
-      setTransactions(loadedTransactions.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+      const sheetTransactions = await getTransactions(SPREADSHEET_ID);
+      setTransactions(sheetTransactions);
+      localStorage.setItem('officeBuAppTransactions', JSON.stringify(sheetTransactions));
+      setSyncStatus('connected');
+      showSuccessToast('Data successfully fetched from Google Sheet.');
     } catch (err: any) {
-      console.error("Error loading transactions:", err);
-      setError(`Failed to load data. Check sheet ID and permissions. Error: ${err.message || 'Unknown'}`);
-    } finally {
-      setIsLoading(false);
+      setError(`Failed to fetch from sheet: ${err.message}`);
+      setSyncStatus('error');
     }
-  }, [spreadsheetId]);
+  }, [isSignedIn]);
 
   useEffect(() => {
-    if (isSignedIn && spreadsheetId) {
-      loadTransactions();
+    if (isSignedIn) {
+      fetchDataFromSheet();
+    } else {
+      setSyncStatus('offline');
     }
-  }, [isSignedIn, spreadsheetId, loadTransactions]);
+  }, [isSignedIn, fetchDataFromSheet]);
 
-
-  // --- Auth Handlers ---
+  // --- Auth & Setup Handlers ---
+  const handleSaveCredentials = (key: string, id: string, url: string) => {
+    localStorage.setItem('officeBuAppApiKey', key);
+    localStorage.setItem('officeBuAppClientId', id);
+    localStorage.setItem('officeBuAppWebhookUrl', url);
+    setApiKey(key);
+    setClientId(id);
+    setWebhookUrl(url);
+    setGapiReady(false); 
+    setGisReady(false);
+  };
+  
   const handleAuthClick = () => {
-    if (window.gapi.client.getToken() === null) {
+    if (gapiReady && gisReady && window.tokenClient) {
       window.tokenClient.requestAccessToken({ prompt: 'consent' });
     } else {
-      window.tokenClient.requestAccessToken({ prompt: '' });
+      setError("Google services are not ready. Check your API credentials in Settings.");
     }
   };
 
   const handleSignoutClick = () => {
-    const token = window.gapi.client.getToken();
+    const token = window.gapi?.client.getToken();
     if (token !== null) {
-      window.google.accounts.oauth2.revoke(token.access_token, () => {});
+      window.google?.accounts.oauth2.revoke(token.access_token, () => {});
       window.gapi.client.setToken(null);
-      setIsSignedIn(false);
-      setTransactions([]);
     }
+    setIsSignedIn(false);
+    setSyncStatus('offline');
   };
 
-  const handleSaveSpreadsheetId = (id: string) => {
-    localStorage.setItem('officeBuAppSheetId', id);
-    setSpreadsheetId(id);
-  };
-
-  // --- CRUD Operations ---
-  const addTransaction = async (tx: Omit<Transaction, 'id' | 'date'>) => {
-    if (!spreadsheetId) return;
-    const newTx: Transaction = {
-      ...tx,
-      id: Date.now(),
-      date: new Date().toISOString(),
-    };
+  // --- CRUD Operations (Local-First with Webhook Sync) ---
+  const addTransaction = (tx: Omit<Transaction, 'id' | 'date'>) => {
+    const newTx: Transaction = { ...tx, id: Date.now(), date: new Date().toISOString() };
     
-    setIsLoading(true);
-    try {
-        await appendTransaction(spreadsheetId, newTx);
-        setTransactions(prev => [newTx, ...prev]);
-        setIsAddModalOpen(false);
-    } catch (err: any) {
-        console.error("Error adding transaction:", err);
-        setError(`Failed to save transaction. Error: ${err.message || 'Unknown'}`);
-    } finally {
-        setIsLoading(false);
+    // 1. Update state and localStorage immediately
+    const updatedTransactions = [newTx, ...transactions];
+    setTransactions(updatedTransactions);
+    localStorage.setItem('officeBuAppTransactions', JSON.stringify(updatedTransactions));
+    setIsAddModalOpen(false);
+
+    // 2. Sync to Google Sheets via webhook
+    if (isSignedIn && webhookUrl) {
+      setSyncStatus('syncing');
+      syncChangeToWebhook(webhookUrl, 'add', newTx)
+        .then(() => {
+          setSyncStatus('connected');
+          showSuccessToast('Transaction saved and synced!');
+        })
+        .catch(err => {
+          setError(`Saved locally, but failed to sync: ${err.message}`);
+          setSyncStatus('error');
+        });
     }
   };
 
-  const deleteTransaction = async (id: number) => {
-     if (!spreadsheetId) return;
-     setIsLoading(true);
-     try {
-        await deleteTransactionRow(spreadsheetId, id);
-        setTransactions(prev => prev.filter(t => t.id !== id));
-     } catch(err: any) {
-        console.error("Error deleting transaction:", err);
-        setError(`Failed to delete transaction. Error: ${err.message || 'Unknown'}`);
-     } finally {
-        setIsLoading(false);
-     }
+  const deleteTransaction = (id: number) => {
+    const txToDelete = transactions.find(t => t.id === id);
+    if (!txToDelete) return;
+    
+    // 1. Update state and localStorage immediately
+    const updatedTransactions = transactions.filter(t => t.id !== id);
+    setTransactions(updatedTransactions);
+    localStorage.setItem('officeBuAppTransactions', JSON.stringify(updatedTransactions));
+     
+    // 2. Sync deletion to Google Sheets via webhook
+    if (isSignedIn && webhookUrl) {
+      setSyncStatus('syncing');
+      syncChangeToWebhook(webhookUrl, 'delete', txToDelete)
+        .then(() => {
+          setSyncStatus('connected');
+          showSuccessToast('Transaction deleted and synced!');
+        })
+        .catch(err => {
+          setError(`Deleted locally, but failed to sync deletion: ${err.message}`);
+          setSyncStatus('error');
+        });
+    }
+  };
+  
+  const clearAllTransactions = () => {
+    // 1. Clear local state
+    setTransactions([]);
+    localStorage.removeItem('officeBuAppTransactions');
+
+    // 2. Sync clear action to webhook
+    if (isSignedIn && webhookUrl) {
+      setSyncStatus('syncing');
+      syncChangeToWebhook(webhookUrl, 'clear')
+        .then(() => {
+          setSyncStatus('connected');
+          showSuccessToast('All transactions cleared and synced!');
+        })
+        .catch(err => {
+          setError(`Cleared locally, but failed to clear sheet: ${err.message}`);
+          setSyncStatus('error');
+        });
+    }
   };
 
 
@@ -210,16 +284,20 @@ const App: React.FC = () => {
     localStorage.setItem('officeBuAppTheme', theme);
   }, [theme]);
   
-  
   // --- UI Handlers ---
   const handleUpdateIcon = (type: keyof IconMapping, icon: string) => {
     setIconMapping(prev => ({ ...prev, [type]: icon }));
   };
 
+  const showSuccessToast = (message: string) => {
+    setSuccessMessage(message);
+    setTimeout(() => setSuccessMessage(null), 3000);
+  };
+
   const confirmDelete = (id: number) => {
     setConfirmationState({
       isOpen: true,
-      message: 'Are you sure you want to delete this record from your Google Sheet?',
+      message: 'Are you sure you want to delete this record?',
       onConfirm: () => {
         deleteTransaction(id);
         closeConfirmation();
@@ -228,8 +306,14 @@ const App: React.FC = () => {
   };
 
   const confirmClearAll = () => {
-     setError("Clearing all transactions directly from the app is disabled when connected to Google Sheets. Please manage bulk deletions directly in your Google Sheet for safety.");
-     setTimeout(() => setError(null), 5000);
+     setConfirmationState({
+        isOpen: true,
+        message: 'This will delete ALL transactions locally and in Google Sheets. This cannot be undone. Are you sure?',
+        onConfirm: () => {
+            clearAllTransactions();
+            closeConfirmation();
+        }
+     })
   };
 
   const closeConfirmation = () => {
@@ -240,56 +324,41 @@ const App: React.FC = () => {
     return transactions.filter(tx => {
       const query = searchQuery.toLowerCase().trim();
       if (!query) return true;
-
       const noteMatch = tx.note.toLowerCase().includes(query);
       const amountMatch = tx.amount.toString().includes(query);
       const userMatch = tx.user.toLowerCase().includes(query);
-
       return noteMatch || amountMatch || userMatch;
     });
   }, [transactions, searchQuery]);
 
-
   // --- Render Logic ---
-  if (isLoading && (!gapiReady || !gisReady)) {
+  if (isLoading) {
     return <div className="min-h-screen flex items-center justify-center bg-theme-body text-theme-main"><i className="fa-solid fa-spinner fa-spin text-3xl"></i></div>;
-  }
-
-  if (!isSignedIn) {
-    return <LoginPage 
-        handleAuthClick={handleAuthClick} 
-        onSetTheme={setTheme} 
-        currentTheme={theme}
-      />;
-  }
-
-  if (!spreadsheetId) {
-      return <GoogleSheetSetup onSave={handleSaveSpreadsheetId} onLogout={handleSignoutClick} />
   }
 
   return (
     <div className="relative min-h-screen max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pb-24">
       {error && (
-        <div className="fixed top-4 right-4 bg-red-500 text-white p-4 rounded-lg shadow-lg z-[100]">
+        <div className="fixed top-4 right-4 bg-red-500 text-white p-4 rounded-lg shadow-lg z-[100] max-w-sm animate-pulse">
           <p className="font-bold">Error</p>
           <p className="text-sm">{error}</p>
           <button onClick={() => setError(null)} className="absolute top-1 right-2 text-white/80 hover:text-white">&times;</button>
         </div>
       )}
-      {isLoading && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 bg-blue-500 text-white px-4 py-2 rounded-lg shadow-lg z-[100] flex items-center gap-2">
-            <i className="fa-solid fa-spinner fa-spin"></i>
-            <span>Syncing with Google Sheets...</span>
+      {successMessage && (
+        <div className="fixed top-4 right-4 bg-green-500 text-white p-4 rounded-lg shadow-lg z-[100] max-w-sm animate-pulse">
+          <p className="font-bold">Success</p>
+          <p className="text-sm">{successMessage}</p>
         </div>
       )}
-
+      
       <Header 
         onToggleChart={() => setIsChartModalOpen(true)} 
         currentTheme={theme}
         onSetTheme={setTheme}
         onToggleCalculator={() => setIsCalculatorModalOpen(true)}
         onToggleSettings={() => setIsSettingsModalOpen(true)}
-        onLogout={handleSignoutClick}
+        syncStatus={syncStatus}
       />
 
       <main>
@@ -321,36 +390,22 @@ const App: React.FC = () => {
       </button>
 
       {/* Modals */}
-      <AddTransactionModal 
-        isOpen={isAddModalOpen} 
-        onClose={() => setIsAddModalOpen(false)} 
-        onAdd={addTransaction} 
-        iconMapping={iconMapping}
-      />
-
-      <AnalyticsModal 
-        isOpen={isChartModalOpen} 
-        onClose={() => setIsChartModalOpen(false)} 
-        transactions={transactions} 
-      />
-
-      <ConfirmationModal 
-        isOpen={confirmationState.isOpen}
-        message={confirmationState.message}
-        onConfirm={confirmationState.onConfirm}
-        onCancel={closeConfirmation}
-      />
-
-      <CalculatorModal
-        isOpen={isCalculatorModalOpen}
-        onClose={() => setIsCalculatorModalOpen(false)}
-      />
-
-      <SettingsModal
-        isOpen={isSettingsModalOpen}
-        onClose={() => setIsSettingsModalOpen(false)}
-        iconMapping={iconMapping}
+      <AddTransactionModal isOpen={isAddModalOpen} onClose={() => setIsAddModalOpen(false)} onAdd={addTransaction} iconMapping={iconMapping} />
+      <AnalyticsModal isOpen={isChartModalOpen} onClose={() => setIsChartModalOpen(false)} transactions={transactions} />
+      <ConfirmationModal isOpen={confirmationState.isOpen} message={confirmationState.message} onConfirm={confirmationState.onConfirm} onCancel={closeConfirmation} />
+      <CalculatorModal isOpen={isCalculatorModalOpen} onClose={() => setIsCalculatorModalOpen(false)} />
+      <SettingsModal 
+        isOpen={isSettingsModalOpen} 
+        onClose={() => setIsSettingsModalOpen(false)} 
+        iconMapping={iconMapping} 
         onUpdateIcon={handleUpdateIcon}
+        apiKey={apiKey}
+        clientId={clientId}
+        webhookUrl={webhookUrl}
+        onSaveCredentials={handleSaveCredentials}
+        syncStatus={syncStatus}
+        onSignIn={handleAuthClick}
+        onSignOut={handleSignoutClick}
       />
     </div>
   );
