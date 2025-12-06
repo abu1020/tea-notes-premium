@@ -48,7 +48,7 @@ const AnalyticsModal: React.FC<AnalyticsModalProps> = ({ isOpen, onClose, transa
         </button>
       </div>
       
-      <div className="flex-1 flex flex-col items-center justify-center">
+      <div className="flex-1 flex flex-col items-center justify-center min-h-0">
         {data.length > 0 ? (
           <>
             <div className="w-full h-64">
@@ -76,9 +76,12 @@ const AnalyticsModal: React.FC<AnalyticsModalProps> = ({ isOpen, onClose, transa
               </ResponsiveContainer>
             </div>
             
-            <div className="mt-8 text-center bg-theme-body p-4 rounded-2xl w-full max-w-xs mx-auto">
-                <p className="text-sm font-bold uppercase text-theme-muted tracking-wider">Total Items Purchased</p>
-                <p className="text-3xl font-bold text-theme-main mt-1">{totalQuantity}</p>
+            <div className="mt-8 text-center bg-theme-body p-4 rounded-2xl w-full max-w-xs mx-auto flex flex-col items-center gap-2">
+                <div className="flex items-center gap-3">
+                    <i className="fa-solid fa-boxes-stacked text-theme-muted text-xl"></i>
+                    <p className="text-sm font-bold uppercase text-theme-muted tracking-wider">Total Items Purchased</p>
+                </div>
+                <p className="text-4xl font-black text-theme-main">{totalQuantity}</p>
             </div>
           </>
         ) : (
