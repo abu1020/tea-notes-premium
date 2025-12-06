@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { TransactionType, IconMapping, SyncStatus } from '../types';
+import { Transaction, TransactionType, IconMapping, SyncStatus } from '../types';
+import { exportToCsv, exportToPdf } from '../utils/export';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -13,6 +14,7 @@ interface SettingsModalProps {
   syncStatus: SyncStatus;
   onSignIn: () => void;
   onSignOut: () => void;
+  transactions: Transaction[];
 }
 
 const AVAILABLE_ICONS = [
@@ -36,15 +38,21 @@ const CATEGORIES: { id: TransactionType; label: string; colorClass: string }[] =
 const SettingsModal: React.FC<SettingsModalProps> = ({ 
   isOpen, onClose, iconMapping, onUpdateIcon,
   apiKey: initialApiKey, clientId: initialClientId, webhookUrl: initialWebhookUrl,
-  onSaveCredentials, syncStatus, onSignIn, onSignOut
+  onSaveCredentials, syncStatus, onSignIn, onSignOut, transactions
 }) => {
   const [activeTab, setActiveTab] = useState('icons');
   const [activeCategory, setActiveCategory] = useState<TransactionType>('tea');
 
+  // State for Google Sync tab
   const [apiKey, setApiKey] = useState(initialApiKey || '');
   const [clientId, setClientId] = useState(initialClientId || '');
   const [webhookUrl, setWebhookUrl] = useState(initialWebhookUrl || '');
   const SPREADSHEET_ID = '12L__j0lwySdW4bleW4rIbnCvRdcARxfZ94v4NElAJsI';
+
+  // State for Export tab
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [exportMessage, setExportMessage] = useState('');
 
   useEffect(() => {
     setApiKey(initialApiKey || '');
@@ -52,11 +60,45 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
     setWebhookUrl(initialWebhookUrl || '');
   }, [initialApiKey, initialClientId, initialWebhookUrl]);
 
-  const handleSave = () => {
+  const handleSaveCredentials = () => {
     if(apiKey && clientId && webhookUrl) {
       onSaveCredentials(apiKey, clientId, webhookUrl);
     }
   };
+
+  const handleExport = (format: 'csv' | 'pdf') => {
+    setExportMessage('Exporting...');
+    try {
+      let filteredTransactions = transactions;
+      if (startDate && endDate) {
+        const start = new Date(startDate).getTime();
+        const end = new Date(endDate).getTime() + 86400000; // include the whole end day
+        filteredTransactions = transactions.filter(tx => {
+            const txDate = new Date(tx.date).getTime();
+            return txDate >= start && txDate <= end;
+        });
+      }
+
+      if (filteredTransactions.length === 0) {
+        setExportMessage('No data for selected range.');
+        setTimeout(() => setExportMessage(''), 3000);
+        return;
+      }
+      
+      if (format === 'csv') {
+        exportToCsv(filteredTransactions);
+      } else {
+        exportToPdf(filteredTransactions);
+      }
+      setExportMessage(`Exported to ${format.toUpperCase()} successfully!`);
+
+    } catch (error) {
+       setExportMessage('Export failed.');
+    } finally {
+        setTimeout(() => setExportMessage(''), 3000);
+    }
+  };
+
 
   const modalClasses = `fixed inset-0 bg-theme-surface z-50 transition-transform duration-300 p-6 flex flex-col ${isOpen ? 'translate-y-0' : 'translate-y-full'}`;
 
@@ -76,6 +118,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
         <nav className="flex gap-6 -mb-px">
           <button onClick={() => setActiveTab('icons')} className={`py-3 border-b-2 font-semibold ${activeTab === 'icons' ? 'border-theme-primary text-theme-primary' : 'border-transparent text-theme-muted'}`}>Customize</button>
           <button onClick={() => setActiveTab('sync')} className={`py-3 border-b-2 font-semibold ${activeTab === 'sync' ? 'border-theme-primary text-theme-primary' : 'border-transparent text-theme-muted'}`}>Google Sync</button>
+          <button onClick={() => setActiveTab('export')} className={`py-3 border-b-2 font-semibold ${activeTab === 'export' ? 'border-theme-primary text-theme-primary' : 'border-transparent text-theme-muted'}`}>Export</button>
         </nav>
       </div>
       
@@ -144,7 +187,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                 <label className="text-sm font-bold text-theme-muted block mb-2">Google Client ID (for reading)</label>
                 <input type="password" value={clientId} onChange={e => setClientId(e.target.value)} className="w-full bg-theme-surface border-2 border-transparent rounded-lg p-2 text-sm text-theme-main outline-none focus:border-theme-primary" />
               </div>
-              <button onClick={handleSave} className="w-full bg-theme-primary-gradient text-white font-semibold py-2 rounded-lg transition-transform active:scale-95">Save Credentials</button>
+              <button onClick={handleSaveCredentials} className="w-full bg-theme-primary-gradient text-white font-semibold py-2 rounded-lg transition-transform active:scale-95">Save Credentials</button>
             </div>
 
             <div className="text-center">
@@ -155,6 +198,41 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
              <p className="text-xs text-theme-muted text-center">Your credentials and URL are saved only in your browser's local storage.</p>
           </div>
+        )}
+
+        {activeTab === 'export' && (
+           <div className="space-y-6">
+            <div>
+              <h3 className="font-bold text-lg text-theme-main">Export Data</h3>
+              <p className="text-sm text-theme-muted">Download your transaction data as a CSV or PDF file.</p>
+            </div>
+
+            <div className="bg-theme-body p-4 rounded-xl space-y-4">
+              <h4 className="text-sm font-bold text-theme-main">Filter by Date Range (Optional)</h4>
+              <div className="flex flex-col sm:flex-row gap-4">
+                <div className="flex-1">
+                  <label htmlFor="startDate" className="text-xs font-semibold text-theme-muted block mb-1">Start Date</label>
+                  <input type="date" id="startDate" value={startDate} onChange={e => setStartDate(e.target.value)} className="w-full bg-theme-surface rounded-lg p-2 text-sm text-theme-main outline-none focus:ring-2 ring-theme-primary" />
+                </div>
+                <div className="flex-1">
+                  <label htmlFor="endDate" className="text-xs font-semibold text-theme-muted block mb-1">End Date</label>
+                  <input type="date" id="endDate" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full bg-theme-surface rounded-lg p-2 text-sm text-theme-main outline-none focus:ring-2 ring-theme-primary" />
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <button onClick={() => handleExport('csv')} className="flex items-center justify-center gap-2 bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3 px-4 rounded-lg transition-all active:scale-95 shadow-md">
+                    <i className="fa-solid fa-file-csv"></i>
+                    <span>Export to CSV</span>
+                </button>
+                <button onClick={() => handleExport('pdf')} className="flex items-center justify-center gap-2 bg-red-500 hover:bg-red-600 text-white font-semibold py-3 px-4 rounded-lg transition-all active:scale-95 shadow-md">
+                    <i className="fa-solid fa-file-pdf"></i>
+                    <span>Export to PDF</span>
+                </button>
+            </div>
+            {exportMessage && <p className="text-center text-sm font-semibold text-theme-main mt-4">{exportMessage}</p>}
+           </div>
         )}
       </div>
     </div>

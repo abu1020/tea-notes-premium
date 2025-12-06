@@ -406,6 +406,7 @@ const App: React.FC = () => {
         syncStatus={syncStatus}
         onSignIn={handleAuthClick}
         onSignOut={handleSignoutClick}
+        transactions={transactions}
       />
     </div>
   );
