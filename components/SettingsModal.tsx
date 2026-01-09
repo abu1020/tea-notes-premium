@@ -1,6 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { Transaction, TransactionType, IconMapping, SyncStatus } from '../types';
+
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Transaction, TransactionType, IconMapping, SyncStatus, ThemeType, BackupData } from '../types';
 import { exportToCsv, exportToPdf } from '../utils/export';
+import { createBackupData, downloadBackupFile, parseBackupFile } from '../utils/backup';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -15,17 +17,48 @@ interface SettingsModalProps {
   onSignIn: () => void;
   onSignOut: () => void;
   transactions: Transaction[];
+  currentTheme: ThemeType;
+  onRestore: (data: BackupData) => void;
 }
 
+// Expanded list of icons
 const AVAILABLE_ICONS = [
+  // Food & Drink
   'fa-mug-hot', 'fa-coffee', 'fa-glass-water', 'fa-wine-glass', 'fa-martini-glass',
   'fa-beer-mug-empty', 'fa-flask', 'fa-bottle-water', 'fa-cookie-bite',
   'fa-cookie', 'fa-burger', 'fa-pizza-slice', 'fa-ice-cream',
-  'fa-bowl-food', 'fa-apple-whole', 'fa-carrot', 'fa-leaf',
-  'fa-utensils', 'fa-check', 'fa-wallet', 'fa-credit-card',
-  'fa-money-bill', 'fa-coins', 'fa-piggy-bank', 'fa-sack-dollar',
-  'fa-cart-shopping', 'fa-basket-shopping', 'fa-bag-shopping', 'fa-tag',
-  'fa-gift', 'fa-star', 'fa-heart', 'fa-bell', 'fa-fire', 'fa-snowflake'
+  'fa-bowl-food', 'fa-apple-whole', 'fa-carrot', 'fa-leaf', 'fa-utensils',
+  'fa-bread-slice', 'fa-candy-cane', 'fa-lemon', 'fa-pepper-hot',
+  
+  // Office & Business
+  'fa-briefcase', 'fa-building', 'fa-clipboard', 'fa-clipboard-check', 
+  'fa-folder', 'fa-folder-open', 'fa-envelope', 'fa-envelope-open',
+  'fa-paperclip', 'fa-stapler', 'fa-print', 'fa-fax',
+  'fa-laptop', 'fa-desktop', 'fa-mobile-screen', 'fa-phone',
+  'fa-calendar', 'fa-calendar-check', 'fa-calendar-days',
+  'fa-chart-pie', 'fa-chart-line', 'fa-chart-bar',
+  'fa-pen', 'fa-pen-nib', 'fa-marker', 'fa-highlighter',
+  'fa-trash', 'fa-trash-can', 'fa-box-archive', 'fa-file',
+  'fa-file-invoice', 'fa-file-lines', 'fa-id-card', 'fa-id-badge',
+  'fa-user-tie', 'fa-users', 'fa-handshake', 'fa-globe',
+
+  // Money & Shopping
+  'fa-check', 'fa-wallet', 'fa-credit-card', 'fa-money-bill', 
+  'fa-coins', 'fa-piggy-bank', 'fa-sack-dollar', 'fa-receipt',
+  'fa-cart-shopping', 'fa-basket-shopping', 'fa-bag-shopping', 
+  'fa-tag', 'fa-tags', 'fa-gift', 'fa-percent',
+
+  // Transport & Travel
+  'fa-car', 'fa-bus', 'fa-train', 'fa-plane', 'fa-bicycle',
+  'fa-gas-pump', 'fa-road', 'fa-map-location-dot', 'fa-hotel',
+  'fa-ticket', 'fa-suitcase',
+  
+  // UI & Misc
+  'fa-star', 'fa-heart', 'fa-bell', 'fa-fire', 'fa-snowflake',
+  'fa-bolt', 'fa-cloud', 'fa-droplet', 'fa-umbrella',
+  'fa-house', 'fa-key', 'fa-lock', 'fa-gear', 'fa-wrench',
+  'fa-circle-check', 'fa-circle-xmark', 'fa-circle-exclamation',
+  'fa-thumbs-up', 'fa-thumbs-down', 'fa-lightbulb'
 ];
 
 const CATEGORIES: { id: TransactionType; label: string; colorClass: string }[] = [
@@ -38,10 +71,13 @@ const CATEGORIES: { id: TransactionType; label: string; colorClass: string }[] =
 const SettingsModal: React.FC<SettingsModalProps> = ({ 
   isOpen, onClose, iconMapping, onUpdateIcon,
   apiKey: initialApiKey, clientId: initialClientId, webhookUrl: initialWebhookUrl,
-  onSaveCredentials, syncStatus, onSignIn, onSignOut, transactions
+  onSaveCredentials, syncStatus, onSignIn, onSignOut, transactions, currentTheme, onRestore
 }) => {
   const [activeTab, setActiveTab] = useState('icons');
-  const [activeCategory, setActiveCategory] = useState<TransactionType>('tea');
+  
+  // Icon Picker State
+  const [pickerCategory, setPickerCategory] = useState<TransactionType | null>(null);
+  const [iconSearchQuery, setIconSearchQuery] = useState('');
 
   // State for Google Sync tab
   const [apiKey, setApiKey] = useState(initialApiKey || '');
@@ -54,11 +90,24 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   const [endDate, setEndDate] = useState('');
   const [exportMessage, setExportMessage] = useState('');
 
+  // State for Backup tab
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [backupMessage, setBackupMessage] = useState({ text: '', type: '' });
+
   useEffect(() => {
     setApiKey(initialApiKey || '');
     setClientId(initialClientId || '');
     setWebhookUrl(initialWebhookUrl || '');
   }, [initialApiKey, initialClientId, initialWebhookUrl]);
+
+  // Filter icons based on search
+  const filteredIcons = useMemo(() => {
+    if (!iconSearchQuery) return AVAILABLE_ICONS;
+    const lowerQuery = iconSearchQuery.toLowerCase();
+    return AVAILABLE_ICONS.filter(icon => 
+        icon.replace('fa-', '').includes(lowerQuery)
+    );
+  }, [iconSearchQuery]);
 
   const handleSaveCredentials = () => {
     if(apiKey && clientId && webhookUrl) {
@@ -99,139 +148,250 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  const handleBackupDownload = () => {
+    try {
+      const data = createBackupData(transactions, iconMapping, currentTheme);
+      downloadBackupFile(data);
+      setBackupMessage({ text: 'Backup file downloaded successfully!', type: 'success' });
+    } catch (err) {
+      setBackupMessage({ text: 'Failed to create backup.', type: 'error' });
+    }
+    setTimeout(() => setBackupMessage({ text: '', type: '' }), 3000);
+  };
+
+  const handleBackupUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setBackupMessage({ text: 'Restoring data...', type: 'info' });
+      const data = await parseBackupFile(file);
+      onRestore(data);
+      setBackupMessage({ text: 'Data restored successfully!', type: 'success' });
+    } catch (err: any) {
+      console.error(err);
+      setBackupMessage({ text: err.message || 'Invalid backup file.', type: 'error' });
+    }
+    
+    // Clear input so same file can be selected again
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    setTimeout(() => setBackupMessage({ text: '', type: '' }), 3000);
+  };
+
+  const handleClose = () => {
+    setPickerCategory(null);
+    setIconSearchQuery('');
+    onClose();
+  };
+
 
   const modalClasses = `fixed inset-0 bg-theme-surface z-50 transition-transform duration-300 p-6 flex flex-col ${isOpen ? 'translate-y-0' : 'translate-y-full'}`;
 
   return (
     <div className={modalClasses}>
       <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold text-theme-main">Settings</h2>
+        <h2 className="text-2xl font-bold text-theme-main tracking-tight">Settings</h2>
         <button 
-          onClick={onClose}
+          onClick={handleClose}
           className="w-10 h-10 rounded-full bg-theme-body text-theme-main flex items-center justify-center transition-colors hover:bg-black/5"
         >
           <i className="fa-solid fa-xmark"></i>
         </button>
       </div>
 
-      <div className="border-b border-black/10 mb-6">
-        <nav className="flex gap-6 -mb-px">
-          <button onClick={() => setActiveTab('icons')} className={`py-3 border-b-2 font-semibold ${activeTab === 'icons' ? 'border-theme-primary text-theme-primary' : 'border-transparent text-theme-muted'}`}>Customize</button>
-          <button onClick={() => setActiveTab('sync')} className={`py-3 border-b-2 font-semibold ${activeTab === 'sync' ? 'border-theme-primary text-theme-primary' : 'border-transparent text-theme-muted'}`}>Google Sync</button>
-          <button onClick={() => setActiveTab('export')} className={`py-3 border-b-2 font-semibold ${activeTab === 'export' ? 'border-theme-primary text-theme-primary' : 'border-transparent text-theme-muted'}`}>Export</button>
+      <div className="border-b border-black/5 mb-6">
+        <nav className="flex gap-4 sm:gap-8 -mb-px overflow-x-auto scrollbar-hide">
+          <button onClick={() => setActiveTab('icons')} className={`py-3 border-b-2 font-bold text-sm tracking-wide whitespace-nowrap ${activeTab === 'icons' ? 'border-theme-primary text-theme-primary' : 'border-transparent text-theme-muted'}`}>ICONS</button>
+          <button onClick={() => setActiveTab('export')} className={`py-3 border-b-2 font-bold text-sm tracking-wide whitespace-nowrap ${activeTab === 'export' ? 'border-theme-primary text-theme-primary' : 'border-transparent text-theme-muted'}`}>EXPORT</button>
+          <button onClick={() => setActiveTab('backup')} className={`py-3 border-b-2 font-bold text-sm tracking-wide whitespace-nowrap ${activeTab === 'backup' ? 'border-theme-primary text-theme-primary' : 'border-transparent text-theme-muted'}`}>BACKUP</button>
         </nav>
       </div>
       
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto min-h-0">
         {activeTab === 'icons' && (
-          <div>
-            {/* Category Tabs */}
-            <div className="flex gap-2 mb-8 overflow-x-auto pb-2 scrollbar-hide">
-              {CATEGORIES.map((cat) => (
-                <button
-                  key={cat.id}
-                  onClick={() => setActiveCategory(cat.id)}
-                  className={`flex items-center gap-2 px-4 py-3 rounded-2xl transition-all border-2 whitespace-nowrap ${
-                    activeCategory === cat.id 
-                      ? `border-theme-primary bg-theme-body` 
-                      : 'border-transparent bg-theme-body opacity-60'
-                  }`}
-                >
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center ${cat.colorClass}`}>
-                    <i className={`fa-solid ${iconMapping[cat.id]}`}></i>
-                  </div>
-                  <span className="font-bold text-sm text-theme-main">{cat.label}</span>
-                </button>
-              ))}
-            </div>
-            <h3 className="text-xs font-bold uppercase text-theme-muted tracking-widest mb-4">Select Icon for {CATEGORIES.find(c => c.id === activeCategory)?.label}</h3>
-            <div className="grid grid-cols-9 gap-1">
-              {AVAILABLE_ICONS.map((icon) => (
-                <button
-                  key={icon}
-                  onClick={() => onUpdateIcon(activeCategory, icon)}
-                  className={`aspect-square rounded-xl flex items-center justify-center text-sm transition-all ${
-                    iconMapping[activeCategory] === icon
-                      ? 'bg-theme-primary text-white shadow-md scale-105'
-                      : 'bg-theme-body text-theme-main hover:bg-black/5'
-                  }`}
-                >
-                  <i className={`fa-solid ${icon}`}></i>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
+          <div className="h-full flex flex-col">
+            {!pickerCategory ? (
+                /* Category List View */
+                <div className="space-y-3">
+                    <p className="text-sm text-theme-muted mb-2">Select a category to change its icon.</p>
+                    {CATEGORIES.map((cat) => (
+                        <button 
+                            key={cat.id}
+                            onClick={() => setPickerCategory(cat.id)}
+                            className="w-full flex items-center justify-between p-4 bg-theme-body rounded-2xl border border-transparent hover:border-black/5 hover:bg-black/5 transition-all group active:scale-[0.98]"
+                        >
+                            <div className="flex items-center gap-4">
+                                <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-xl shadow-sm ${cat.colorClass}`}>
+                                    <i className={`fa-solid ${iconMapping[cat.id]}`}></i>
+                                </div>
+                                <span className="font-bold text-lg text-theme-main">{cat.label}</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-theme-muted text-sm font-medium group-hover:text-theme-primary transition-colors">
+                                <span>Change</span>
+                                <div className="w-8 h-8 rounded-full bg-white flex items-center justify-center shadow-sm">
+                                    <i className="fa-solid fa-chevron-right text-xs"></i>
+                                </div>
+                            </div>
+                        </button>
+                    ))}
+                </div>
+            ) : (
+                /* Icon Picker View */
+                <div className="flex flex-col h-full">
+                    <div className="flex items-center gap-3 mb-4">
+                        <button 
+                            onClick={() => { setPickerCategory(null); setIconSearchQuery(''); }}
+                            className="w-9 h-9 rounded-full bg-theme-body flex items-center justify-center text-theme-main hover:bg-black/10 transition-colors"
+                        >
+                            <i className="fa-solid fa-arrow-left"></i>
+                        </button>
+                        <div>
+                            <p className="text-[10px] font-bold uppercase text-theme-muted tracking-wider">Selecting icon for</p>
+                            <h3 className="font-bold text-xl text-theme-main">{CATEGORIES.find(c => c.id === pickerCategory)?.label}</h3>
+                        </div>
+                    </div>
 
-        {activeTab === 'sync' && (
-          <div className="space-y-6">
-            <div>
-              <h3 className="font-bold text-lg text-theme-main">Google Sheets Sync</h3>
-              <p className="text-sm text-theme-muted">Automatically sync your data using a secure Google Apps Script webhook.</p>
-            </div>
-            
-            <div className="bg-theme-body p-4 rounded-xl space-y-4">
-               <div>
-                <label className="text-sm font-bold text-theme-muted block mb-2">Google Spreadsheet ID</label>
-                <input type="text" value={SPREADSHEET_ID} className="w-full bg-theme-surface border-2 border-transparent rounded-lg p-2 text-sm text-theme-muted outline-none" readOnly />
-              </div>
-              <div>
-                <label className="text-sm font-bold text-theme-muted block mb-2">Google Apps Script Webhook URL</label>
-                <input type="password" value={webhookUrl} onChange={e => setWebhookUrl(e.target.value)} className="w-full bg-theme-surface border-2 border-transparent rounded-lg p-2 text-sm text-theme-main outline-none focus:border-theme-primary" placeholder="Paste your deployed script URL"/>
-              </div>
-               <div>
-                <label className="text-sm font-bold text-theme-muted block mb-2">Google API Key (for reading)</label>
-                <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} className="w-full bg-theme-surface border-2 border-transparent rounded-lg p-2 text-sm text-theme-main outline-none focus:border-theme-primary" />
-              </div>
-               <div>
-                <label className="text-sm font-bold text-theme-muted block mb-2">Google Client ID (for reading)</label>
-                <input type="password" value={clientId} onChange={e => setClientId(e.target.value)} className="w-full bg-theme-surface border-2 border-transparent rounded-lg p-2 text-sm text-theme-main outline-none focus:border-theme-primary" />
-              </div>
-              <button onClick={handleSaveCredentials} className="w-full bg-theme-primary-gradient text-white font-semibold py-2 rounded-lg transition-transform active:scale-95">Save Credentials</button>
-            </div>
+                    <div className="relative mb-4">
+                        <i className="fa-solid fa-search absolute left-4 top-1/2 -translate-y-1/2 text-theme-muted text-sm"></i>
+                        <input 
+                            type="text" 
+                            placeholder="Search icons (e.g., 'car', 'user', 'food')..." 
+                            value={iconSearchQuery}
+                            onChange={(e) => setIconSearchQuery(e.target.value)}
+                            className="w-full bg-theme-body rounded-xl py-3 pl-10 pr-4 text-sm font-medium outline-none border border-transparent focus:border-theme-primary/30 focus:bg-white transition-all"
+                            autoFocus
+                        />
+                    </div>
 
-            <div className="text-center">
-              {syncStatus !== 'connected' && initialApiKey && <button onClick={onSignIn} className="bg-blue-500 text-white font-semibold py-2 px-6 rounded-lg">Sign in with Google</button>}
-              {syncStatus === 'connecting' && <p className="text-amber-500"><i className="fa-solid fa-spinner fa-spin mr-2"></i>Connecting...</p>}
-              {syncStatus === 'connected' && <button onClick={onSignOut} className="bg-red-500 text-white font-semibold py-2 px-6 rounded-lg">Disconnect</button>}
-              {syncStatus === 'error' && <p className="text-red-500">Connection Error. Check credentials and sign in again.</p>}
-            </div>
-             <p className="text-xs text-theme-muted text-center">Your credentials and URL are saved only in your browser's local storage.</p>
+                    <div className="flex-1 overflow-y-auto min-h-0 pr-1">
+                        <div className="grid grid-cols-6 sm:grid-cols-8 gap-2 pb-4">
+                            {filteredIcons.map((icon) => (
+                                <button
+                                    key={icon}
+                                    onClick={() => {
+                                        if (pickerCategory) {
+                                            onUpdateIcon(pickerCategory, icon);
+                                            setPickerCategory(null);
+                                            setIconSearchQuery('');
+                                        }
+                                    }}
+                                    className={`aspect-square rounded-xl flex items-center justify-center text-sm transition-all duration-200 ${
+                                        iconMapping[pickerCategory] === icon
+                                        ? 'bg-theme-primary text-white shadow-lg shadow-theme-primary/30 scale-105 ring-2 ring-offset-2 ring-theme-primary'
+                                        : 'bg-theme-body text-theme-muted hover:bg-black/10 hover:text-theme-main hover:scale-105'
+                                    }`}
+                                    title={icon.replace('fa-', '')}
+                                >
+                                    <i className={`fa-solid ${icon}`}></i>
+                                </button>
+                            ))}
+                        </div>
+                        {filteredIcons.length === 0 && (
+                            <div className="text-center py-10 opacity-50">
+                                <i className="fa-solid fa-icons text-3xl mb-2"></i>
+                                <p className="text-sm">No icons found matching "{iconSearchQuery}"</p>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
           </div>
         )}
 
         {activeTab === 'export' && (
            <div className="space-y-6">
             <div>
-              <h3 className="font-bold text-lg text-theme-main">Export Data</h3>
-              <p className="text-sm text-theme-muted">Download your transaction data as a CSV or PDF file.</p>
+              <h3 className="font-bold text-lg text-theme-main">Export Reports</h3>
+              <p className="text-sm text-theme-muted mt-1">Generate PDF or CSV reports for record-keeping.</p>
             </div>
 
-            <div className="bg-theme-body p-4 rounded-xl space-y-4">
-              <h4 className="text-sm font-bold text-theme-main">Filter by Date Range (Optional)</h4>
+            <div className="bg-theme-body p-6 rounded-[1.5rem] space-y-4 border border-black/5">
+              <h4 className="text-sm font-bold text-theme-main mb-2">Filter by Date Range (Optional)</h4>
               <div className="flex flex-col sm:flex-row gap-4">
                 <div className="flex-1">
-                  <label htmlFor="startDate" className="text-xs font-semibold text-theme-muted block mb-1">Start Date</label>
-                  <input type="date" id="startDate" value={startDate} onChange={e => setStartDate(e.target.value)} className="w-full bg-theme-surface rounded-lg p-2 text-sm text-theme-main outline-none focus:ring-2 ring-theme-primary" />
+                  <label htmlFor="startDate" className="text-xs font-bold text-theme-muted uppercase tracking-wider block mb-1">Start Date</label>
+                  <input type="date" id="startDate" value={startDate} onChange={e => setStartDate(e.target.value)} className="input-modern w-full rounded-xl p-3 text-sm text-theme-main outline-none" />
                 </div>
                 <div className="flex-1">
-                  <label htmlFor="endDate" className="text-xs font-semibold text-theme-muted block mb-1">End Date</label>
-                  <input type="date" id="endDate" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full bg-theme-surface rounded-lg p-2 text-sm text-theme-main outline-none focus:ring-2 ring-theme-primary" />
+                  <label htmlFor="endDate" className="text-xs font-bold text-theme-muted uppercase tracking-wider block mb-1">End Date</label>
+                  <input type="date" id="endDate" value={endDate} onChange={e => setEndDate(e.target.value)} className="input-modern w-full rounded-xl p-3 text-sm text-theme-main outline-none" />
                 </div>
               </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <button onClick={() => handleExport('csv')} className="flex items-center justify-center gap-2 bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3 px-4 rounded-lg transition-all active:scale-95 shadow-md">
-                    <i className="fa-solid fa-file-csv"></i>
+                <button onClick={() => handleExport('csv')} className="flex items-center justify-center gap-3 bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 px-4 rounded-2xl transition-all active:scale-95 shadow-lg shadow-blue-500/20 hover:-translate-y-0.5">
+                    <i className="fa-solid fa-file-csv text-xl"></i>
                     <span>Export to CSV</span>
                 </button>
-                <button onClick={() => handleExport('pdf')} className="flex items-center justify-center gap-2 bg-red-500 hover:bg-red-600 text-white font-semibold py-3 px-4 rounded-lg transition-all active:scale-95 shadow-md">
-                    <i className="fa-solid fa-file-pdf"></i>
+                <button onClick={() => handleExport('pdf')} className="flex items-center justify-center gap-3 bg-red-500 hover:bg-red-600 text-white font-bold py-4 px-4 rounded-2xl transition-all active:scale-95 shadow-lg shadow-red-500/20 hover:-translate-y-0.5">
+                    <i className="fa-solid fa-file-pdf text-xl"></i>
                     <span>Export to PDF</span>
                 </button>
             </div>
-            {exportMessage && <p className="text-center text-sm font-semibold text-theme-main mt-4">{exportMessage}</p>}
+            {exportMessage && <p className="text-center text-sm font-bold text-theme-primary mt-4 animate-pulse">{exportMessage}</p>}
+           </div>
+        )}
+
+        {activeTab === 'backup' && (
+           <div className="space-y-6">
+            <div>
+              <h3 className="font-bold text-lg text-theme-main">Backup & Restore</h3>
+              <p className="text-sm text-theme-muted mt-1">Save your data to a file or restore from a previous backup.</p>
+            </div>
+
+            {/* Backup Section */}
+            <div className="bg-theme-body p-6 rounded-[1.5rem] border border-black/5 hover:border-theme-primary/20 transition-colors">
+               <div className="flex items-center gap-4 mb-4">
+                   <div className="w-12 h-12 rounded-xl bg-theme-surface flex items-center justify-center text-theme-primary shadow-sm">
+                       <i className="fa-solid fa-download text-xl"></i>
+                   </div>
+                   <div>
+                       <h4 className="font-bold text-theme-main">Backup Data</h4>
+                       <p className="text-xs text-theme-muted">Download your data as a JSON file to save to Google Drive.</p>
+                   </div>
+               </div>
+               <button 
+                onClick={handleBackupDownload}
+                className="w-full bg-theme-primary-gradient text-white font-bold py-3 rounded-xl shadow-lg shadow-theme-primary/20 transition-all hover:-translate-y-0.5 active:scale-95"
+               >
+                   Download Backup File
+               </button>
+            </div>
+
+            {/* Restore Section */}
+            <div className="bg-theme-body p-6 rounded-[1.5rem] border border-black/5 hover:border-theme-primary/20 transition-colors">
+               <div className="flex items-center gap-4 mb-4">
+                   <div className="w-12 h-12 rounded-xl bg-theme-surface flex items-center justify-center text-amber-500 shadow-sm">
+                       <i className="fa-solid fa-upload text-xl"></i>
+                   </div>
+                   <div>
+                       <h4 className="font-bold text-theme-main">Restore Data</h4>
+                       <p className="text-xs text-theme-muted">Import a .json backup file to restore your transactions.</p>
+                   </div>
+               </div>
+               
+               <input 
+                 type="file" 
+                 accept=".json" 
+                 ref={fileInputRef} 
+                 onChange={handleBackupUpload}
+                 className="hidden" 
+               />
+               <button 
+                onClick={() => fileInputRef.current?.click()}
+                className="w-full bg-white border-2 border-dashed border-theme-muted/30 text-theme-muted font-bold py-3 rounded-xl transition-all hover:border-theme-primary hover:text-theme-primary active:scale-95 active:bg-theme-body"
+               >
+                   Select Backup File
+               </button>
+            </div>
+            
+             {/* Feedback Message */}
+             {backupMessage.text && (
+                 <div className={`p-4 rounded-xl text-center font-bold text-sm animate-fade-in ${backupMessage.type === 'error' ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-700'}`}>
+                     {backupMessage.text}
+                 </div>
+             )}
            </div>
         )}
       </div>

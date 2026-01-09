@@ -1,3 +1,4 @@
+
 export type TransactionType = 'tea' | 'coffee' | 'snacks' | 'payment';
 
 export type ThemeType = 'matcha' | 'dark' | 'hibiscus' | 'chai' | 'ocean';
@@ -24,3 +25,20 @@ export type IconMapping = {
 };
 
 export type SyncStatus = 'offline' | 'connecting' | 'connected' | 'syncing' | 'error';
+
+export interface User {
+  id: string;
+  name: string;
+  email: string;
+  isAdmin?: boolean;
+}
+
+export type AuthPage = 'login' | 'register';
+
+export interface BackupData {
+  version: number;
+  timestamp: string;
+  transactions: Transaction[];
+  iconMapping: IconMapping;
+  theme: ThemeType;
+}

@@ -7,6 +7,17 @@
     
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['"Times New Roman"', 'serif'],
+                    },
+                },
+            },
+        }
+    </script>
     
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -19,30 +30,34 @@
         /* --- 🎨 THEME ENGINE --- */
         :root {
             --font-main: 'Times New Roman', serif;
-            --bg-body: #F2F4F6;
+            --bg-body: #F8FAFC;
             --surface: #FFFFFF;
-            --primary: #059669; /* Green */
-            --primary-gradient: linear-gradient(135deg, #34d399 0%, #059669 100%);
-            --text-main: #111827;
-            --text-muted: #9CA3AF;
-            --danger: #EF4444;
-            --success: #10B981;
+            
+            /* Default Matcha */
+            --primary: #059669; 
+            --primary-light: #d1fae5;
+            --primary-gradient: linear-gradient(135deg, #10B981 0%, #047857 100%);
+            
+            --text-main: #1e293b;
+            --text-muted: #64748b;
         }
 
         /* 🍵 Matcha (Default) */
         [data-theme="matcha"] {
-            --bg-body: #ecfdf5;
+            --bg-body: #f0fdf4;
             --primary: #059669;
-            --primary-gradient: linear-gradient(135deg, #6ee7b7 0%, #047857 100%);
+            --primary-light: #d1fae5;
+            --primary-gradient: linear-gradient(135deg, #34d399 0%, #059669 100%);
         }
 
         /* 🌑 Dark Roast */
         [data-theme="dark"] {
-            --bg-body: #111827;
-            --surface: #1F2937;
-            --text-main: #F9FAFB;
-            --text-muted: #6B7280;
-            --primary: #F59E0B;
+            --bg-body: #0f172a;
+            --surface: #1e293b;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary: #fbbf24;
+            --primary-light: #451a03;
             --primary-gradient: linear-gradient(135deg, #fbbf24 0%, #b45309 100%);
         }
 
@@ -50,13 +65,15 @@
         [data-theme="hibiscus"] {
             --bg-body: #fff1f2;
             --primary: #e11d48;
-            --primary-gradient: linear-gradient(135deg, #fda4af 0%, #be123c 100%);
+            --primary-light: #ffe4e6;
+            --primary-gradient: linear-gradient(135deg, #fb7185 0%, #be123c 100%);
         }
 
         /* ☕ Chai */
         [data-theme="chai"] {
             --bg-body: #fff7ed;
             --primary: #ea580c;
+            --primary-light: #ffedd5;
             --primary-gradient: linear-gradient(135deg, #fdba74 0%, #c2410c 100%);
         }
 
@@ -64,17 +81,22 @@
         [data-theme="ocean"] {
             --bg-body: #eff6ff;
             --primary: #2563eb;
-            --primary-gradient: linear-gradient(135deg, #93c5fd 0%, #1d4ed8 100%);
+            --primary-light: #dbeafe;
+            --primary-gradient: linear-gradient(135deg, #60a5fa 0%, #1d4ed8 100%);
+        }
+
+        body, input, textarea, select, button {
+            font-family: var(--font-main);
         }
 
         body {
-            font-family: var(--font-main);
             background-color: var(--bg-body);
             color: var(--text-main);
             transition: background-color 0.4s ease, color 0.4s ease;
             -webkit-tap-highlight-color: transparent;
             margin: 0;
-            font-size: 17px;
+            font-size: 16px;
+            line-height: 1.5;
         }
 
         /* Utility classes for theme variables to use in Tailwind */
@@ -86,7 +108,20 @@
         .text-theme-primary { color: var(--primary); }
         .border-theme-primary { border-color: var(--primary); }
         .bg-theme-primary { background-color: var(--primary); }
+        .bg-theme-primary-light { background-color: var(--primary-light); }
         .border-theme-main { border-color: var(--text-main); }
+
+        /* Custom Input Styling */
+        .input-modern {
+            background-color: var(--bg-body);
+            border: 1px solid transparent;
+            transition: all 0.2s ease;
+        }
+        .input-modern:focus {
+            background-color: var(--surface);
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px var(--primary-light);
+        }
 
         /* Smooth scrollbar for horizontal lists */
         .scrollbar-hide::-webkit-scrollbar {
@@ -100,13 +135,17 @@
 <script type="importmap">
 {
   "imports": {
-    "react/": "https://aistudiocdn.com/react@^19.2.1/",
-    "react": "https://aistudiocdn.com/react@^19.2.1",
-    "recharts": "https://aistudiocdn.com/recharts@^3.5.1",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/"
+    "react": "https://esm.sh/react@18.3.1",
+    "react-dom": "https://esm.sh/react-dom@18.3.1",
+    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+    "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime",
+    "recharts": "https://esm.sh/recharts@2.12.7?external=react,react-dom",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/"
   }
 }
 </script>
+<script type="module" src="./index.tsx"></script>
 </head>
 <body>
     <div id="root"></div>

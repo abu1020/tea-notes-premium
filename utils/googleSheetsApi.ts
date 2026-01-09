@@ -1,5 +1,11 @@
 import { Transaction } from '../types';
 
+declare global {
+  interface Window {
+    gapi: any;
+  }
+}
+
 const SHEET_NAME = 'Transactions';
 const SHEET_RANGE = `${SHEET_NAME}!A:H`; // Columns for id, type, amount, note, date, user, quantity, price
 
