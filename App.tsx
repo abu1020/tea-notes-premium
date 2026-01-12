@@ -1,19 +1,27 @@
 
-import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
-import { Transaction, ThemeType, ConfirmationModalState, IconMapping, SyncStatus, User, AuthPage, BackupData } from './types';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { Transaction, ThemeType, ConfirmationModalState, IconMapping, SyncStatus, TransactionType } from './types';
 import Header from './components/Header';
 import Dashboard from './components/Dashboard';
 import TransactionList from './components/TransactionList';
-import LoginPage from './components/LoginPage';
-import RegistrationPage from './components/RegistrationPage';
+import AddTransactionModal from './components/AddTransactionModal';
+import AnalyticsModal from './components/AnalyticsModal';
+import ConfirmationModal from './components/ConfirmationModal';
+import CalculatorModal from './components/CalculatorModal';
+import SettingsModal from './components/SettingsModal';
+import { getTransactions } from './utils/googleSheetsApi';
+import { syncChangeToWebhook } from './utils/webhook';
 
-// Lazy load modals to optimize initial load
-const AddTransactionModal = lazy(() => import('./components/AddTransactionModal'));
-const AnalyticsModal = lazy(() => import('./components/AnalyticsModal'));
-const ConfirmationModal = lazy(() => import('./components/ConfirmationModal'));
-const CalculatorModal = lazy(() => import('./components/CalculatorModal'));
-const SettingsModal = lazy(() => import('./components/SettingsModal'));
-const AboutModal = lazy(() => import('./components/AboutModal'));
+declare global {
+  interface Window {
+    gapi: any;
+    google: any;
+    tokenClient: any;
+  }
+}
+
+const SCOPES = 'https://www.googleapis.com/auth/spreadsheets.readonly';
+const SPREADSHEET_ID = '12L__j0lwySdW4bleW4rIbnCvRdcARxfZ94v4NElAJsI';
 
 const DEFAULT_ICON_MAPPING: IconMapping = {
   tea: 'fa-mug-hot',
@@ -23,22 +31,14 @@ const DEFAULT_ICON_MAPPING: IconMapping = {
 };
 
 const App: React.FC = () => {
-  // --- Auth State ---
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [currentAuthPage, setCurrentAuthPage] = useState<AuthPage>('login');
-
-  // --- App State ---
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [theme, setTheme] = useState<ThemeType>('matcha');
   const [searchQuery, setSearchQuery] = useState('');
   
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
-
   const [isChartModalOpen, setIsChartModalOpen] = useState(false);
   const [isCalculatorModalOpen, setIsCalculatorModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  const [isAboutModalOpen, setIsAboutModalOpen] = useState(false);
   
   const [iconMapping, setIconMapping] = useState<IconMapping>(DEFAULT_ICON_MAPPING);
 
@@ -48,229 +48,300 @@ const App: React.FC = () => {
     onConfirm: () => {},
   });
 
-  // App Loading State
-  const [isAppLoading, setIsAppLoading] = useState(true);
-  
-  // --- 1. Check for Session on Mount ---
+  // --- State for Google Integration ---
+  const [apiKey, setApiKey] = useState<string | null>(null);
+  const [clientId, setClientId] = useState<string | null>(null);
+  const [webhookUrl, setWebhookUrl] = useState<string | null>(null);
+  const [gapiReady, setGapiReady] = useState(false);
+  const [gisReady, setGisReady] = useState(false);
+  const [isSignedIn, setIsSignedIn] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('offline');
+
+  // --- Initialization ---
   useEffect(() => {
-    const sessionUser = sessionStorage.getItem('officeBuApp_currentUser');
-    if (sessionUser) {
-      setCurrentUser(JSON.parse(sessionUser));
-    }
-    setIsAppLoading(false);
-  }, []);
-
-  // --- 2. Load User Data when User Changes ---
-  useEffect(() => {
-    if (!currentUser) return;
-
-    // Helper to get namespaced key
-    const getKey = (key: string) => `officeBuApp_${currentUser.id}_${key}`;
-
-    const savedTheme = localStorage.getItem(getKey('theme')) as ThemeType;
+    setIsLoading(true);
+    const savedTheme = localStorage.getItem('officeBuAppTheme') as ThemeType;
     if (savedTheme) setTheme(savedTheme);
 
-    const savedIcons = localStorage.getItem(getKey('icons'));
+    const savedIcons = localStorage.getItem('officeBuAppIcons');
     if (savedIcons) setIconMapping(JSON.parse(savedIcons));
-    else setIconMapping(DEFAULT_ICON_MAPPING);
     
-    const savedTransactions = localStorage.getItem(getKey('transactions'));
-    if (savedTransactions) {
-      setTransactions(JSON.parse(savedTransactions));
-    } else {
-      setTransactions([]);
+    const savedTransactions = localStorage.getItem('officeBuAppTransactions');
+    if (savedTransactions) setTransactions(JSON.parse(savedTransactions));
+
+    const savedApiKey = localStorage.getItem('officeBuAppApiKey');
+    const savedClientId = localStorage.getItem('officeBuAppClientId');
+    const savedWebhookUrl = localStorage.getItem('officeBuAppWebhookUrl');
+    if (savedApiKey && savedClientId) {
+      setApiKey(savedApiKey);
+      setClientId(savedClientId);
     }
-  }, [currentUser]);
-
-
-  // --- Auth Handlers ---
-  const handleLogin = useCallback((user: User) => {
-    setCurrentUser(user);
-    sessionStorage.setItem('officeBuApp_currentUser', JSON.stringify(user));
+    if (savedWebhookUrl) setWebhookUrl(savedWebhookUrl);
+    
+    setIsLoading(false);
   }, []);
 
-  const handleLogout = useCallback(() => {
-    setCurrentUser(null);
-    sessionStorage.removeItem('officeBuApp_currentUser');
-    setCurrentAuthPage('login');
-    setTransactions([]);
+  const initializeGapiClient = useCallback(async (key: string) => {
+    try {
+      await window.gapi.client.init({
+        apiKey: key,
+        discoveryDocs: ['https://sheets.googleapis.com/$discovery/rest?version=v4'],
+      });
+      setGapiReady(true);
+    } catch (err) {
+      setError("Invalid Google API Key.");
+      setSyncStatus('error');
+    }
   }, []);
-
-  // --- CRUD Operations ---
-  const addTransaction = useCallback((tx: Omit<Transaction, 'id'>) => {
-    if (!currentUser) return;
-    
-    // Check if date is provided, otherwise default to now
-    const txDate = tx.date || new Date().toISOString();
-
-    const newTx: Transaction = { ...tx, id: Date.now(), date: txDate };
-    
-    setTransactions(prev => {
-      const updated = [newTx, ...prev];
-      localStorage.setItem(`officeBuApp_${currentUser.id}_transactions`, JSON.stringify(updated));
-      return updated;
-    });
-    
-    closeAddModal();
-  }, [currentUser]);
-
-  const updateTransaction = useCallback((updatedTx: Transaction) => {
-    if (!currentUser) return;
-
-    setTransactions(prev => {
-      const updated = prev.map(t => t.id === updatedTx.id ? updatedTx : t);
-      localStorage.setItem(`officeBuApp_${currentUser.id}_transactions`, JSON.stringify(updated));
-      return updated;
-    });
-    
-    closeAddModal();
-  }, [currentUser]);
-
-  const deleteTransaction = useCallback((id: number) => {
-    if (!currentUser) return;
-    setTransactions(prev => {
-      const updated = prev.filter(t => t.id !== id);
-      localStorage.setItem(`officeBuApp_${currentUser.id}_transactions`, JSON.stringify(updated));
-      return updated;
-    });
-  }, [currentUser]);
   
-  const clearAllTransactions = useCallback(() => {
-    if (!currentUser) return;
-    setTransactions([]);
-    localStorage.removeItem(`officeBuApp_${currentUser.id}_transactions`);
-  }, [currentUser]);
-
-  // --- Restore Data Handler ---
-  const handleRestore = useCallback((data: BackupData) => {
-    if (!currentUser) return;
-
-    // Update State
-    setTransactions(data.transactions);
-    setIconMapping(data.iconMapping);
-    if (data.theme) setTheme(data.theme);
-
-    // Save to LocalStorage
-    const getKey = (key: string) => `officeBuApp_${currentUser.id}_${key}`;
-    localStorage.setItem(getKey('transactions'), JSON.stringify(data.transactions));
-    localStorage.setItem(getKey('icons'), JSON.stringify(data.iconMapping));
-    if (data.theme) localStorage.setItem(getKey('theme'), data.theme);
-  }, [currentUser]);
-
-
-  // --- Local Settings Persistence ---
-  useEffect(() => {
-    if (!currentUser) return;
-    localStorage.setItem(`officeBuApp_${currentUser.id}_icons`, JSON.stringify(iconMapping));
-  }, [iconMapping, currentUser]);
+  const initializeGisClient = useCallback((id: string) => {
+    try {
+      window.tokenClient = window.google.accounts.oauth2.initTokenClient({
+        client_id: id,
+        scope: SCOPES,
+        callback: (tokenResponse: any) => {
+          if (tokenResponse.error) {
+            if (tokenResponse.error !== 'popup_closed_by_user') {
+                 setError(`Auth failed: ${tokenResponse.error}`);
+                 setSyncStatus('error');
+            }
+            return;
+          }
+          setIsSignedIn(true);
+        },
+      });
+      setGisReady(true);
+    } catch (err) {
+      setError("Invalid Google Client ID.");
+      setSyncStatus('error');
+    }
+  }, []);
 
   useEffect(() => {
-    if (!currentUser) return;
-    document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem(`officeBuApp_${currentUser.id}_theme`, theme);
-  }, [theme, currentUser]);
+    if (apiKey && clientId && !gapiReady && !gisReady) {
+      setSyncStatus('connecting');
+      const gapiScriptId = 'gapi-script';
+      if (!document.getElementById(gapiScriptId)) {
+        const gapiScript = document.createElement('script');
+        gapiScript.id = gapiScriptId;
+        gapiScript.src = 'https://apis.google.com/js/api.js';
+        gapiScript.onload = () => window.gapi.load('client', () => initializeGapiClient(apiKey));
+        document.body.appendChild(gapiScript);
+      }
+      const gisScriptId = 'gis-script';
+      if (!document.getElementById(gisScriptId)) {
+        const gisScript = document.createElement('script');
+        gisScript.id = gisScriptId;
+        gisScript.src = 'https://accounts.google.com/gsi/client';
+        gisScript.async = true;
+        gisScript.defer = true;
+        gisScript.onload = () => initializeGisClient(clientId);
+        document.body.appendChild(gisScript);
+      }
+    }
+  }, [apiKey, clientId, gapiReady, gisReady, initializeGapiClient, initializeGisClient]);
+
+  const fetchDataFromSheet = useCallback(async () => {
+    if (!isSignedIn) return;
+    setSyncStatus('syncing');
+    try {
+      const sheetTransactions = await getTransactions(SPREADSHEET_ID);
+      setTransactions(sheetTransactions);
+      localStorage.setItem('officeBuAppTransactions', JSON.stringify(sheetTransactions));
+      setSyncStatus('connected');
+      showSuccessToast('Data fetched from Google Sheet.');
+    } catch (err: any) {
+      setError(`Fetch failed: ${err.message}`);
+      setSyncStatus('error');
+    }
+  }, [isSignedIn]);
+
+  useEffect(() => {
+    if (isSignedIn) fetchDataFromSheet();
+    else setSyncStatus('offline');
+  }, [isSignedIn, fetchDataFromSheet]);
+
+  const handleSaveCredentials = (key: string, id: string, url: string) => {
+    localStorage.setItem('officeBuAppApiKey', key);
+    localStorage.setItem('officeBuAppClientId', id);
+    localStorage.setItem('officeBuAppWebhookUrl', url);
+    setApiKey(key); setClientId(id); setWebhookUrl(url);
+    setGapiReady(false); setGisReady(false);
+  };
   
-  // --- UI Handlers ---
-  const handleUpdateIcon = useCallback((type: keyof IconMapping, icon: string) => {
-    setIconMapping(prev => ({ ...prev, [type]: icon }));
-  }, []);
+  const handleAuthClick = () => {
+    if (window.tokenClient) window.tokenClient.requestAccessToken({ prompt: 'consent' });
+    else setError("Google services not ready.");
+  };
 
-  const openAddModal = useCallback(() => {
-    setEditingTransaction(null);
-    setIsAddModalOpen(true);
-  }, []);
+  const handleSignoutClick = () => {
+    const token = window.gapi?.client.getToken();
+    if (token !== null) {
+      window.google?.accounts.oauth2.revoke(token.access_token, () => {});
+      window.gapi.client.setToken(null);
+    }
+    setIsSignedIn(false); setSyncStatus('offline');
+  };
 
-  const openEditModal = useCallback((tx: Transaction) => {
-    setEditingTransaction(tx);
-    setIsAddModalOpen(true);
-  }, []);
-
-  const closeAddModal = useCallback(() => {
+  // --- CRUD & Bulk Actions ---
+  const addTransactions = (newItems: Omit<Transaction, 'id' | 'date'>[]) => {
+    const timestamp = Date.now();
+    const newTxs: Transaction[] = newItems.map((item, index) => ({
+      ...item,
+      id: timestamp + index,
+      date: new Date().toISOString()
+    }));
+    
+    const updated = [...newTxs, ...transactions];
+    setTransactions(updated);
+    localStorage.setItem('officeBuAppTransactions', JSON.stringify(updated));
     setIsAddModalOpen(false);
-    setEditingTransaction(null);
-  }, []);
+    
+    if (isSignedIn && webhookUrl) {
+      setSyncStatus('syncing');
+      syncChangeToWebhook(webhookUrl, 'bulk_add', newTxs)
+        .then(() => setSyncStatus('connected'))
+        .catch(err => { setError(`Sync failed: ${err.message}`); setSyncStatus('error'); });
+    }
+  };
 
-  const closeConfirmation = useCallback(() => {
-    setConfirmationState(prev => ({ ...prev, isOpen: false }));
-  }, []);
+  const deleteTransaction = (id: number) => {
+    const txToDelete = transactions.find(t => t.id === id);
+    if (!txToDelete) return;
+    const updated = transactions.filter(t => t.id !== id);
+    setTransactions(updated);
+    localStorage.setItem('officeBuAppTransactions', JSON.stringify(updated));
+    if (isSignedIn && webhookUrl) {
+      setSyncStatus('syncing');
+      syncChangeToWebhook(webhookUrl, 'delete', txToDelete)
+        .then(() => setSyncStatus('connected'))
+        .catch(err => { setError(`Sync failed: ${err.message}`); setSyncStatus('error'); });
+    }
+  };
 
-  const confirmDelete = useCallback((id: number) => {
+  const handleBulkDelete = (ids: number[]) => {
+    const updated = transactions.filter(t => !ids.includes(t.id));
+    setTransactions(updated);
+    localStorage.setItem('officeBuAppTransactions', JSON.stringify(updated));
+    if (isSignedIn && webhookUrl) {
+      setSyncStatus('syncing');
+      syncChangeToWebhook(webhookUrl, 'bulk_delete', ids)
+        .then(() => { setSyncStatus('connected'); showSuccessToast('Bulk deletion synced!'); })
+        .catch(err => { setError(`Bulk delete failed: ${err.message}`); setSyncStatus('error'); });
+    }
+  };
+
+  const handleBulkCategorize = (ids: number[], newType: TransactionType) => {
+    const updated = transactions.map(t => ids.includes(t.id) ? { ...t, type: newType } : t);
+    setTransactions(updated);
+    localStorage.setItem('officeBuAppTransactions', JSON.stringify(updated));
+    if (isSignedIn && webhookUrl) {
+      setSyncStatus('syncing');
+      syncChangeToWebhook(webhookUrl, 'bulk_update', { ids, updates: { type: newType } })
+        .then(() => { setSyncStatus('connected'); showSuccessToast('Bulk update synced!'); })
+        .catch(err => { setError(`Bulk update failed: ${err.message}`); setSyncStatus('error'); });
+    }
+  };
+
+  const clearAllTransactions = () => {
+    setTransactions([]);
+    localStorage.removeItem('officeBuAppTransactions');
+    if (isSignedIn && webhookUrl) {
+      setSyncStatus('syncing');
+      syncChangeToWebhook(webhookUrl, 'clear')
+        .then(() => setSyncStatus('connected'))
+        .catch(err => { setError(`Sync failed: ${err.message}`); setSyncStatus('error'); });
+    }
+  };
+
+  useEffect(() => {
+    localStorage.setItem('officeBuAppIcons', JSON.stringify(iconMapping));
+  }, [iconMapping]);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('officeBuAppTheme', theme);
+  }, [theme]);
+  
+  const handleUpdateIcon = (type: keyof IconMapping, icon: string) => {
+    setIconMapping(prev => ({ ...prev, [type]: icon }));
+  };
+
+  const showSuccessToast = (message: string) => {
+    setSuccessMessage(message);
+    setTimeout(() => setSuccessMessage(null), 3000);
+  };
+
+  const confirmDelete = (id: number) => {
     setConfirmationState({
       isOpen: true,
-      message: 'Are you sure you want to delete this record?',
-      onConfirm: () => {
-        deleteTransaction(id);
-        closeConfirmation();
-      },
+      message: 'Delete this record?',
+      onConfirm: () => { deleteTransaction(id); closeConfirmation(); },
     });
-  }, [deleteTransaction, closeConfirmation]);
+  };
 
-  const confirmClearAll = useCallback(() => {
+  const confirmClearAll = () => {
      setConfirmationState({
         isOpen: true,
-        message: 'This will delete ALL transactions locally. This cannot be undone. Are you sure?',
-        onConfirm: () => {
-            clearAllTransactions();
-            closeConfirmation();
-        }
+        message: 'Delete ALL transactions locally and in Google Sheets?',
+        onConfirm: () => { clearAllTransactions(); closeConfirmation(); }
      })
-  }, [clearAllTransactions, closeConfirmation]);
+  };
+
+  const closeConfirmation = () => { setConfirmationState(prev => ({ ...prev, isOpen: false })); };
 
   const filteredTransactions = useMemo(() => {
     return transactions.filter(tx => {
       const query = searchQuery.toLowerCase().trim();
       if (!query) return true;
-      const noteMatch = tx.note.toLowerCase().includes(query);
-      const amountMatch = tx.amount.toString().includes(query);
-      const userMatch = tx.user.toLowerCase().includes(query);
-      return noteMatch || amountMatch || userMatch;
+      return tx.note.toLowerCase().includes(query) || tx.amount.toString().includes(query) || tx.user.toLowerCase().includes(query);
     });
   }, [transactions, searchQuery]);
 
+  if (isLoading) return <div className="min-h-screen flex items-center justify-center bg-theme-body text-theme-main"><i className="fa-solid fa-spinner fa-spin text-3xl"></i></div>;
 
-  // --- Render Views ---
-
-  if (isAppLoading) {
-    return <div className="min-h-screen flex items-center justify-center bg-gray-50 text-gray-400"><i className="fa-solid fa-spinner fa-spin text-3xl"></i></div>;
-  }
-
-  // Not Logged In
-  if (!currentUser) {
-    if (currentAuthPage === 'register') {
-      return <RegistrationPage onRegister={handleLogin} onSwitchToLogin={() => setCurrentAuthPage('login')} />;
-    }
-    return <LoginPage onLogin={handleLogin} onSwitchToRegister={() => setCurrentAuthPage('register')} />;
-  }
-
-  // Main App
   return (
-    <div className="relative min-h-screen max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pb-24 font-sans">
+    <div className="relative min-h-screen max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pb-24">
+      {error && (
+        <div className="fixed top-4 right-4 bg-red-500 text-white p-4 rounded-lg shadow-lg z-[100] max-w-sm">
+          <p className="font-bold">Error</p>
+          <p className="text-sm">{error}</p>
+          <button onClick={() => setError(null)} className="absolute top-1 right-2">&times;</button>
+        </div>
+      )}
+      {successMessage && (
+        <div className="fixed top-4 right-4 bg-green-500 text-white p-4 rounded-lg shadow-lg z-[100] max-w-sm">
+          <p className="font-bold">Success</p>
+          <p className="text-sm">{successMessage}</p>
+        </div>
+      )}
       
       <Header 
-        onToggleChart={useCallback(() => setIsChartModalOpen(true), [])} 
+        onToggleChart={() => setIsChartModalOpen(true)} 
         currentTheme={theme}
         onSetTheme={setTheme}
-        onToggleCalculator={useCallback(() => setIsCalculatorModalOpen(true), [])}
-        onToggleSettings={useCallback(() => setIsSettingsModalOpen(true), [])}
-        onToggleAbout={useCallback(() => setIsAboutModalOpen(true), [])}
-        syncStatus={'offline'}
-        onLogout={handleLogout}
-        currentUser={currentUser}
+        onToggleCalculator={() => setIsCalculatorModalOpen(true)}
+        onToggleSettings={() => setIsSettingsModalOpen(true)}
+        syncStatus={syncStatus}
       />
 
-      <main className="animate-fade-in-up">
-        <div className="grid grid-cols-1 md:grid-cols-3 md:gap-8 gap-6">
+      <main>
+        <div className="grid grid-cols-1 md:grid-cols-3 md:gap-8">
           <aside className="md:col-span-1">
             <Dashboard transactions={transactions} />
           </aside>
 
-          <section className="md:col-span-2 md:h-[calc(100vh-140px)]">
+          <section className="md:col-span-2 mt-8 md:mt-0">
             <TransactionList 
               transactions={filteredTransactions}
               totalTransactions={transactions.length}
-              onDelete={confirmDelete}
-              onEdit={openEditModal}
+              onDelete={confirmDelete} 
               onClearAll={confirmClearAll}
+              onBulkDelete={handleBulkDelete}
+              onBulkCategorize={handleBulkCategorize}
               searchQuery={searchQuery}
               onSearchChange={setSearchQuery}
               iconMapping={iconMapping}
@@ -280,49 +351,23 @@ const App: React.FC = () => {
       </main>
 
       <button 
-        onClick={openAddModal}
-        className="fixed bottom-8 right-6 w-16 h-16 bg-theme-primary-gradient rounded-full flex items-center justify-center text-white text-2xl shadow-2xl shadow-theme-primary/40 z-40 transition-all duration-300 active:scale-90 hover:scale-110 hover:-translate-y-2 hover:shadow-theme-primary/50 group"
-        aria-label="Add new bill"
+        onClick={() => setIsAddModalOpen(true)}
+        className="fixed bottom-8 left-1/2 -translate-x-1/2 md:left-auto md:translate-x-0 md:right-8 w-16 h-16 bg-theme-primary-gradient rounded-full flex items-center justify-center text-white text-2xl shadow-lg z-40 transition-transform active:scale-90 hover:scale-105"
       >
-        <i className="fa-solid fa-receipt group-hover:rotate-12 transition-transform duration-300"></i>
-        <div className="absolute inset-0 rounded-full bg-white/20 animate-ping opacity-0 group-hover:opacity-100"></div>
+        <i className="fa-solid fa-plus"></i>
       </button>
 
-      {/* Modals with Suspense for lazy loading */}
-      <Suspense fallback={<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/10 backdrop-blur-sm"><i className="fa-solid fa-circle-notch fa-spin text-3xl text-theme-primary"></i></div>}>
-        {isAddModalOpen && (
-          <AddTransactionModal 
-            isOpen={isAddModalOpen} 
-            onClose={closeAddModal} 
-            onAdd={addTransaction} 
-            onUpdate={updateTransaction}
-            editTransaction={editingTransaction}
-            iconMapping={iconMapping} 
-          />
-        )}
-        {isChartModalOpen && <AnalyticsModal isOpen={isChartModalOpen} onClose={() => setIsChartModalOpen(false)} transactions={transactions} />}
-        {confirmationState.isOpen && <ConfirmationModal isOpen={confirmationState.isOpen} message={confirmationState.message} onConfirm={confirmationState.onConfirm} onCancel={closeConfirmation} />}
-        {isCalculatorModalOpen && <CalculatorModal isOpen={isCalculatorModalOpen} onClose={() => setIsCalculatorModalOpen(false)} />}
-        {isAboutModalOpen && <AboutModal isOpen={isAboutModalOpen} onClose={() => setIsAboutModalOpen(false)} />}
-        {isSettingsModalOpen && (
-          <SettingsModal 
-            isOpen={isSettingsModalOpen} 
-            onClose={() => setIsSettingsModalOpen(false)} 
-            iconMapping={iconMapping} 
-            onUpdateIcon={handleUpdateIcon}
-            apiKey={null}
-            clientId={null}
-            webhookUrl={null}
-            onSaveCredentials={() => {}}
-            syncStatus={'offline'}
-            onSignIn={() => {}}
-            onSignOut={() => {}}
-            transactions={transactions}
-            currentTheme={theme}
-            onRestore={handleRestore}
-          />
-        )}
-      </Suspense>
+      <AddTransactionModal isOpen={isAddModalOpen} onClose={() => setIsAddModalOpen(false)} onAdd={addTransactions} iconMapping={iconMapping} />
+      <AnalyticsModal isOpen={isChartModalOpen} onClose={() => setIsChartModalOpen(false)} transactions={transactions} />
+      <ConfirmationModal isOpen={confirmationState.isOpen} message={confirmationState.message} onConfirm={confirmationState.onConfirm} onCancel={closeConfirmation} />
+      <CalculatorModal isOpen={isCalculatorModalOpen} onClose={() => setIsCalculatorModalOpen(false)} />
+      <SettingsModal 
+        isOpen={isSettingsModalOpen} onClose={() => setIsSettingsModalOpen(false)} 
+        iconMapping={iconMapping} onUpdateIcon={handleUpdateIcon}
+        apiKey={apiKey} clientId={clientId} webhookUrl={webhookUrl}
+        onSaveCredentials={handleSaveCredentials} syncStatus={syncStatus}
+        onSignIn={handleAuthClick} onSignOut={handleSignoutClick}
+      />
     </div>
   );
 };

@@ -26,19 +26,5 @@ export type IconMapping = {
 
 export type SyncStatus = 'offline' | 'connecting' | 'connected' | 'syncing' | 'error';
 
-export interface User {
-  id: string;
-  name: string;
-  email: string;
-  isAdmin?: boolean;
-}
-
-export type AuthPage = 'login' | 'register';
-
-export interface BackupData {
-  version: number;
-  timestamp: string;
-  transactions: Transaction[];
-  iconMapping: IconMapping;
-  theme: ThemeType;
-}
+// Updated SyncAction to include bulk operations
+export type SyncAction = 'add' | 'delete' | 'clear' | 'bulk_delete' | 'bulk_update' | 'bulk_add';
